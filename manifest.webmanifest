@@ -1,0 +1,1 @@
+{"id":"./","name":"Basketball Scoreboard V3","short_name":"Scoreboard","description":"Offline basketball scoreboard with game and shot clocks.","start_url":"./","scope":"./","display":"standalone","background_color":"#10141e","theme_color":"#10141e","icons":[{"src":"./icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
