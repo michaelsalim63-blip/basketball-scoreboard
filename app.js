@@ -1,161 +1,53 @@
-'use strict';
-(() => {
-  const KEY = 'basketball-scoreboard-v3';
-  const $ = id => document.getElementById(id);
-  const integer = (value, fallback, min, max) => Number.isInteger(value) && value >= min && value <= max ? value : fallback;
-  const fresh = () => ({ homeName: 'HOME', awayName: 'AWAY', homeScore: 0, awayScore: 0, homeFouls: 0, awayFouls: 0, quarterMinutes: 10, overtimeMinutes: 5, period: 1, gameMs: 600000, shotMs: 24000, shotEnabled: false, shotOpen: false, soundEnabled: true, running: false, savedAt: Date.now() });
-  let state = fresh();
-  let storageOK = true;
-  try {
-    const saved = JSON.parse(localStorage.getItem(KEY));
-    if (saved && typeof saved === 'object') {
-      for (const team of ['home', 'away']) {
-        state[team + 'Name'] = typeof saved[team + 'Name'] === 'string' ? saved[team + 'Name'].slice(0, 32) : state[team + 'Name'];
-        state[team + 'Score'] = integer(saved[team + 'Score'], 0, 0, 999);
-        state[team + 'Fouls'] = integer(saved[team + 'Fouls'], 0, 0, 99);
-      }
-      state.quarterMinutes = integer(saved.quarterMinutes, 10, 1, 60);
-      state.overtimeMinutes = integer(saved.overtimeMinutes, 5, 1, 60);
-      state.period = integer(saved.period, 1, 1, 103);
-      state.gameMs = integer(saved.gameMs, duration(), 0, 3600000);
-      state.shotMs = integer(saved.shotMs, 24000, 0, 24000);
-      for (const key of ['shotEnabled', 'shotOpen', 'soundEnabled']) state[key] = typeof saved[key] === 'boolean' ? saved[key] : state[key];
-      if (saved.running === true && Number.isFinite(saved.savedAt)) {
-        const elapsed = Math.max(0, Date.now() - saved.savedAt);
-        const consumed = Math.min(elapsed, state.gameMs, state.shotEnabled ? state.shotMs : Infinity);
-        state.gameMs -= consumed;
-        if (state.shotEnabled) state.shotMs -= consumed;
-      }
-    }
-  } catch { storageOK = false; }
-  let lastTick = Date.now();
-  let lastSave = 0;
-  let audioContext;
-  function duration() { return (state.period <= 4 ? state.quarterMinutes : state.overtimeMinutes) * 60000; }
-  function notice(message) { $('notice').textContent = message; }
-  function save() {
-    state.savedAt = Date.now();
-    try { localStorage.setItem(KEY, JSON.stringify(state)); storageOK = true; }
-    catch { storageOK = false; notice('Autosave unavailable. Keep this page open to retain the game.'); }
-    lastSave = state.savedAt;
-  }
-  function unlockAudio() {
-    if (!state.soundEnabled) return;
-    try { audioContext ||= new (window.AudioContext || window.webkitAudioContext)(); audioContext.resume().catch(() => {}); } catch { /* Sound is optional. */ }
-  }
-  function buzzer() {
-    if (!state.soundEnabled || !audioContext) return;
-    try {
-      const oscillator = audioContext.createOscillator();
-      const volume = audioContext.createGain();
-      oscillator.type = 'square'; oscillator.frequency.value = 220;
-      volume.gain.setValueAtTime(0.12, audioContext.currentTime);
-      volume.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.8);
-      oscillator.connect(volume); volume.connect(audioContext.destination);
-      oscillator.start(); oscillator.stop(audioContext.currentTime + 0.8);
-    } catch { /* The visible expiry message remains available. */ }
-  }
-  function tick() {
-    const now = Date.now();
-    const elapsed = Math.max(0, now - lastTick);
-    lastTick = now;
-    if (!state.running) return;
-    const consumed = Math.min(elapsed, state.gameMs, state.shotEnabled ? state.shotMs : Infinity);
-    state.gameMs = Math.max(0, state.gameMs - consumed);
-    if (state.shotEnabled) state.shotMs = Math.max(0, state.shotMs - consumed);
-    if (state.gameMs === 0 || (state.shotEnabled && state.shotMs === 0)) {
-      state.running = false;
-      notice(state.gameMs === 0 ? 'End of period' : 'Shot clock expired');
-      buzzer(); save();
-    } else if (now - lastSave >= 1000) save();
-    render();
-  }
-  function render() {
-    for (const team of ['home', 'away']) {
-      $(team + 'Score').textContent = state[team + 'Score'];
-      $(team + 'Fouls').textContent = state[team + 'Fouls'];
-    }
-    const seconds = Math.ceil(state.gameMs / 1000);
-    $('clock').textContent = String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0');
-    $('clock').classList.toggle('expired', state.gameMs === 0);
-    $('shotClock').textContent = Math.ceil(state.shotMs / 1000);
-    $('period').textContent = state.period <= 4 ? 'QUARTER ' + state.period : 'OVERTIME ' + (state.period - 4);
-    $('toggle').textContent = state.running ? 'Pause' : 'Start';
-    $('toggle').setAttribute('aria-pressed', String(state.running));
-    $('prevPeriod').disabled = state.period === 1;
-    $('nextPeriod').disabled = state.period === 103;
-  }
-  function change(action) { tick(); action(); render(); save(); }
-  for (const team of ['home', 'away']) {
-    $(team + 'Name').value = state[team + 'Name'];
-    $(team + 'Name').addEventListener('input', event => change(() => { state[team + 'Name'] = event.target.value; }));
-    $(team + 'Name').addEventListener('blur', () => {
-      if (!$(team + 'Name').value.trim()) change(() => { state[team + 'Name'] = team.toUpperCase(); $(team + 'Name').value = state[team + 'Name']; });
-    });
-  }
-  document.querySelectorAll('[data-score]').forEach(button => button.addEventListener('click', () => change(() => {
-    const [team, delta] = button.dataset.score.split(',');
-    state[team + 'Score'] = Math.max(0, Math.min(999, state[team + 'Score'] + Number(delta)));
-  })));
-  document.querySelectorAll('[data-foul]').forEach(button => button.addEventListener('click', () => change(() => {
-    const [team, delta] = button.dataset.foul.split(',');
-    state[team + 'Fouls'] = Math.max(0, Math.min(99, state[team + 'Fouls'] + Number(delta)));
-  })));
-  $('toggle').addEventListener('click', () => {
-    unlockAudio();
-    change(() => {
-      if (!state.running && (state.gameMs === 0 || (state.shotEnabled && state.shotMs === 0))) { notice('Reset the expired clock before starting.'); return; }
-      state.running = !state.running; lastTick = Date.now(); notice('');
-    });
-  });
-  $('resetClock').addEventListener('click', () => change(() => {
-    state.running = false; state.gameMs = duration(); state.shotMs = 24000; notice('Clocks reset');
-  }));
-  function setPeriod(delta) {
-    change(() => {
-      state.period = Math.max(1, Math.min(103, state.period + delta));
-      state.running = false; state.gameMs = duration(); state.shotMs = 24000;
-      state.homeFouls = 0; state.awayFouls = 0; notice('New period · clocks and fouls reset');
-    });
-  }
-  $('prevPeriod').addEventListener('click', () => setPeriod(-1));
-  $('nextPeriod').addEventListener('click', () => setPeriod(1));
-  $('quarterMinutes').value = state.quarterMinutes;
-  $('overtimeMinutes').value = state.overtimeMinutes;
-  $('applyDuration').addEventListener('click', () => {
-    const quarter = Number($('quarterMinutes').value), overtime = Number($('overtimeMinutes').value);
-    if (![quarter, overtime].every(value => Number.isInteger(value) && value >= 1 && value <= 60)) { notice('Enter whole minutes from 1 to 60.'); return; }
-    change(() => {
-      state.quarterMinutes = quarter; state.overtimeMinutes = overtime; state.running = false;
-      state.gameMs = duration(); state.shotMs = 24000; notice('Durations applied · clocks reset');
-    });
-  });
-  $('shotEnabled').checked = state.shotEnabled;
-  $('shotEnabled').addEventListener('change', event => change(() => {
-    state.shotEnabled = event.target.checked;
-    if (state.shotEnabled && state.shotMs === 0) state.shotMs = 24000;
-  }));
-  $('shotPanel').open = state.shotOpen;
-  $('shotPanel').addEventListener('toggle', () => change(() => { state.shotOpen = $('shotPanel').open; }));
-  document.querySelectorAll('[data-shot]').forEach(button => button.addEventListener('click', () => change(() => { state.shotMs = Number(button.dataset.shot) * 1000; notice('Shot clock reset'); })));
-  $('soundEnabled').checked = state.soundEnabled;
-  $('soundEnabled').addEventListener('change', event => change(() => { state.soundEnabled = event.target.checked; unlockAudio(); }));
-  $('newGame').addEventListener('click', () => {
-    tick();
-    if (!window.confirm('Start a new game? Scores, fouls and periods will be cleared.')) return;
-    change(() => {
-      state.homeScore = state.awayScore = state.homeFouls = state.awayFouls = 0;
-      state.period = 1; state.running = false; state.gameMs = duration(); state.shotMs = 24000;
-      notice('New game ready');
-    });
-  });
-  document.addEventListener('visibilitychange', () => { tick(); save(); });
-  window.addEventListener('pagehide', () => { tick(); save(); });
-  render();
-  if (!storageOK) notice('Saved game unavailable. A fresh game is ready.');
-  save();
-  window.setInterval(tick, 100);
-  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
-    navigator.serviceWorker.register('./sw.js').catch(() => notice('Offline setup failed. Reconnect and reload to try again.'));
-  }
+(()=>{'use strict';
+const KEY='basketball-scoreboard-v4-v3-screen';
+const defaults=()=>({teams:['HOME','AWAY'],scores:[0,0],fouls:[0,0],period:1,quarterSec:600,otSec:300,gameSec:600,gameRunning:false,shotEnabled:false,shotSec:24,shotRunning:false,autoShot:true,timeoutSec:60,timeoutLimit:3,timeoutUsed:[0,0],timeoutRemaining:60,timeoutTeam:null,timeoutRunning:false,lastTimeout:null,shortBreakSec:120,halfBreakSec:600,otBreakSec:120,breakPending:false,breakActive:false,breakRunning:false,breakRemaining:0,breakTarget:2});
+let s=defaults();try{const saved=JSON.parse(localStorage.getItem(KEY));if(saved&&typeof saved==='object')s={...s,...saved,gameRunning:false,shotRunning:false,timeoutRunning:false,breakRunning:false}}catch{};
+const $=id=>document.getElementById(id), clamp=(v,min,max)=>Math.max(min,Math.min(max,Number.isFinite(+v)?Math.trunc(+v):min)), fmt=n=>`${String(Math.floor(Math.max(0,n)/60)).padStart(2,'0')}:${String(Math.max(0,n)%60).padStart(2,'0')}`;
+let gameDeadline=0,shotDeadline=0,timeoutDeadline=0,breakDeadline=0,lastSave=0;
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(s))}catch{}};
+function notice(msg){$('status').textContent=msg;}
+function render(){for(let i=0;i<2;i++){ $('name'+i).textContent=s.teams[i];$('score'+i).textContent=s.scores[i];$('fouls'+i).textContent=s.fouls[i];$('toLeft'+i).textContent=Math.max(0,s.timeoutLimit-s.timeoutUsed[i]);}
+$('periodBadge').textContent=s.period<=4?'QUARTER '+s.period:'OVERTIME '+(s.period-4);
+const active=s.timeoutTeam!==null, breaking=s.breakActive, pending=s.breakPending;
+$('clockLabel').textContent=active?'TEAM TIMEOUT':breaking?'QUARTER BREAK':pending?'END OF QUARTER':'GAME CLOCK';
+$('gameClock').textContent=fmt(active?s.timeoutRemaining:breaking?s.breakRemaining:s.gameSec);
+$('gameClock').className='clocktime'+(active?' timeout-mode':breaking?' break-mode':'')+((active?s.timeoutRemaining:breaking?s.breakRemaining:s.gameSec)===0?' expired':(!active&&s.gameSec<=60?' warning':''));
+$('timeoutContext').classList.toggle('hidden',!active);
+$('periodControls').classList.toggle('hidden',active||breaking||pending);
+$('gameActions').classList.toggle('hidden',active||breaking||pending);$('breakActions').classList.toggle('hidden',!pending||active||breaking);$('breakRunningActions').classList.toggle('hidden',!breaking||active);$('breakToggle').textContent=s.breakRunning?'Pause Break':'Resume Break';
+$('timeoutActions').classList.toggle('hidden',!active);
+$('timeoutOwner').textContent=active?`${s.teams[s.timeoutTeam]} TIMEOUT`:'';
+$('timeoutStatus').textContent=active?(s.timeoutRunning?'Timeout running · Game paused':'Timeout paused · Game paused'):'';
+$('gameStart').textContent=s.gameRunning?'Pause':'Start';$('gameStart').disabled=active||s.gameSec===0;
+$('shotEnabled').checked=s.shotEnabled;$('shotClock').textContent=s.shotSec;
+$('shotToggle').textContent=s.shotRunning?'Pause shot':'Start shot';$('shotToggle').disabled=active||s.shotSec===0;$('shotPause').disabled=!s.shotRunning;
+$('timeoutToggle').disabled=!active||s.timeoutRemaining===0;
+$('timeoutToggle').textContent=s.timeoutRunning?'Pause Timeout':'Resume Timeout';
+$('timeoutEnd').disabled=!active;document.querySelectorAll('[data-timeout]').forEach(b=>{b.disabled=active||breaking||pending||s.timeoutUsed[Number(b.dataset.timeout)]>=s.timeoutLimit});
+document.querySelectorAll('[data-timeout]').forEach(b=>{const i=Number(b.dataset.timeout);b.disabled=active||breaking||pending||s.timeoutUsed[i]>=s.timeoutLimit});}
+function pauseGame(){if(s.gameRunning){s.gameSec=Math.max(0,Math.ceil((gameDeadline-performance.now())/1000));s.gameRunning=false}}
+function pauseShot(){if(s.shotRunning){s.shotSec=Math.max(0,Math.ceil((shotDeadline-performance.now())/1000));s.shotRunning=false}}
+function pauseTimeout(){if(s.timeoutRunning){s.timeoutRemaining=Math.max(0,Math.ceil((timeoutDeadline-performance.now())/1000));s.timeoutRunning=false}}
+function pauseBreak(){if(s.breakRunning){s.breakRemaining=Math.max(0,Math.ceil((breakDeadline-performance.now())/1000));s.breakRunning=false}}
+function pauseAll(){pauseGame();pauseShot();pauseTimeout();pauseBreak()}
+function breakLength(){return s.period===2?s.halfBreakSec:s.period>=4?s.otBreakSec:s.shortBreakSec}
+function beginBreak(){if(!s.breakPending||s.breakActive)return;pauseGame();pauseShot();s.breakPending=false;s.breakActive=true;s.breakRemaining=breakLength();if(s.breakRemaining>0){s.breakRunning=true;breakDeadline=performance.now()+s.breakRemaining*1000}else finishBreak();render();persist()}
+function finishBreak(){pauseBreak();s.breakActive=false;s.breakPending=false;s.breakRunning=false;s.period=clamp(s.breakTarget,1,20);s.gameSec=s.period<=4?s.quarterSec:s.otSec;s.shotSec=24;s.fouls=[0,0];notice('Break finished. Press Start to begin the next period.');render();persist()}
+function queueBreak(){if(s.period>=20)return;s.breakTarget=s.period+1;s.breakPending=true;s.breakActive=false;notice('Quarter finished. Start Break or Skip Break.')}
+function startGame(){if(s.timeoutTeam!==null||s.breakActive||s.breakPending||s.gameSec<=0)return;s.gameRunning=true;gameDeadline=performance.now()+s.gameSec*1000;if(s.autoShot&&s.shotEnabled&&s.shotSec>0&&!s.shotRunning){s.shotRunning=true;shotDeadline=performance.now()+s.shotSec*1000}}
+function startTimeout(i){if(s.timeoutTeam!==null||s.breakActive||s.breakPending||s.timeoutUsed[i]>=s.timeoutLimit)return;pauseGame();pauseShot();s.timeoutUsed[i]++;s.lastTimeout=i;s.timeoutTeam=i;s.timeoutRemaining=s.timeoutSec;s.timeoutRunning=true;timeoutDeadline=performance.now()+s.timeoutRemaining*1000;notice(`${s.teams[i]} timeout started`);render();persist()}
+function endTimeout(){if(s.timeoutTeam===null)return;pauseTimeout();s.timeoutTeam=null;s.timeoutRemaining=s.timeoutSec;s.timeoutRunning=false;notice('Timeout ended. Resume the game clock manually.');render();persist()}
+function tick(){const now=performance.now();let changed=false;if(s.gameRunning){const next=Math.max(0,Math.ceil((gameDeadline-now)/1000));if(next!==s.gameSec){s.gameSec=next;changed=true}if(next===0){s.gameRunning=false;pauseShot();queueBreak()}}if(s.shotRunning){const next=Math.max(0,Math.ceil((shotDeadline-now)/1000));if(next!==s.shotSec){s.shotSec=next;changed=true}if(next===0){s.shotRunning=false;pauseGame();notice('Shot clock expired')}}if(s.timeoutRunning){const next=Math.max(0,Math.ceil((timeoutDeadline-now)/1000));if(next!==s.timeoutRemaining){s.timeoutRemaining=next;changed=true}if(next===0){s.timeoutRunning=false;s.timeoutTeam=null;s.timeoutRemaining=s.timeoutSec;notice('Timeout finished. Game clock restored; press Start to resume.')}}if(s.breakRunning){const next=Math.max(0,Math.ceil((breakDeadline-now)/1000));if(next!==s.breakRemaining){s.breakRemaining=next;changed=true}if(next===0){s.breakRunning=false;finishBreak()}}if(changed){render();if(now-lastSave>800){persist();lastSave=now}}}
+setInterval(tick,100);document.addEventListener('visibilitychange',()=>{if(document.hidden){pauseAll();persist()}else render()});window.addEventListener('pagehide',()=>{pauseAll();persist()});
+document.querySelectorAll('[data-score]').forEach(b=>b.addEventListener('click',()=>{const [i,n]=b.dataset.score.split(',').map(Number);s.scores[i]=Math.max(0,s.scores[i]+n);render();persist()}));document.querySelectorAll('[data-foul]').forEach(b=>b.addEventListener('click',()=>{s.fouls[+b.dataset.foul]++;render();persist()}));document.querySelectorAll('[data-foul-minus]').forEach(b=>b.addEventListener('click',()=>{const i=+b.dataset.foulMinus;s.fouls[i]=Math.max(0,s.fouls[i]-1);render();persist()}));document.querySelectorAll('[data-timeout]').forEach(b=>b.addEventListener('click',()=>startTimeout(+b.dataset.timeout)));
+$('breakStart').onclick=beginBreak;$('breakSkip').onclick=()=>{if(s.breakPending)finishBreak()};$('breakToggle').onclick=()=>{if(!s.breakActive)return;if(s.breakRunning)pauseBreak();else if(s.breakRemaining>0){s.breakRunning=true;breakDeadline=performance.now()+s.breakRemaining*1000}render();persist()};$('breakEnd').onclick=()=>{if(s.breakActive)finishBreak()};
+$('gameStart').onclick=()=>{if(s.gameRunning){pauseGame();pauseShot()}else startGame();render();persist()};$('gameReset').onclick=()=>{pauseGame();pauseShot();s.gameSec=s.period<=4?s.quarterSec:s.otSec;render();persist()};function changePeriod(n){if(s.timeoutTeam!==null||s.breakActive||s.breakPending){notice('Finish the active timeout or break first.');return}pauseGame();pauseShot();s.period=clamp(s.period+n,1,20);s.gameSec=s.period<=4?s.quarterSec:s.otSec;s.fouls=[0,0];render();persist()};$('nextPeriod').onclick=()=>changePeriod(1);$('prevPeriod').onclick=()=>changePeriod(-1);
+$('shotEnabled').onchange=e=>{pauseShot();s.shotEnabled=e.target.checked;render();persist()};$('shotToggle').onclick=()=>{if(s.shotRunning)pauseShot();else if(s.shotEnabled&&s.shotSec>0&&s.timeoutTeam===null){s.shotRunning=true;shotDeadline=performance.now()+s.shotSec*1000}render();persist()};$('shotPause').onclick=()=>{pauseShot();render();persist()};function resetShot(n){pauseShot();s.shotSec=n;render();persist()};$('shot24').onclick=()=>resetShot(24);$('shot14').onclick=()=>resetShot(14);
+$('timeoutToggle').onclick=()=>{if(s.timeoutTeam===null)return;if(s.timeoutRunning)pauseTimeout();else if(s.timeoutRemaining>0){s.timeoutRunning=true;timeoutDeadline=performance.now()+s.timeoutRemaining*1000}render();persist()};$('timeoutEnd').onclick=endTimeout;
+function populate(){ $('team0').value=s.teams[0];$('team1').value=s.teams[1];$('quarterMinutes').value=Math.floor(s.quarterSec/60);$('quarterSeconds').value=s.quarterSec%60;$('timeoutDuration').value=s.timeoutSec;$('timeoutLimit').value=s.timeoutLimit;$('overtimeMinutes').value=s.otSec/60;$('autoShot').checked=s.autoShot;$('shortBreak').value=s.shortBreakSec/60;$('halfBreak').value=s.halfBreakSec/60;$('otBreak').value=s.otBreakSec/60};
+$('saveSettings').onclick=()=>{const q=clamp($('quarterMinutes').value,0,99)*60+clamp($('quarterSeconds').value,0,59);if(q===0){notice('Quarter duration must be at least 1 second.');return}pauseGame();pauseShot();pauseTimeout();s.teams=[$('team0').value.trim()||'HOME',$('team1').value.trim()||'AWAY'];s.quarterSec=q;s.otSec=clamp($('overtimeMinutes').value,1,30)*60;s.timeoutSec=clamp($('timeoutDuration').value,1,600);s.timeoutLimit=clamp($('timeoutLimit').value,0,20);s.autoShot=$('autoShot').checked;s.shortBreakSec=clamp($('shortBreak').value,0,60)*60;s.halfBreakSec=clamp($('halfBreak').value,0,60)*60;s.otBreakSec=clamp($('otBreak').value,0,60)*60;if(s.timeoutTeam===null)s.timeoutRemaining=s.timeoutSec;if(s.gameSec===(s.period<=4?s.quarterSec:s.otSec)){} // preserve an in-progress clock
+render();persist();notice('Settings saved. Reset the game clock to apply the new period duration.');};
+$('undoTimeout').onclick=()=>{if(s.timeoutTeam!==null){notice('End the active timeout before undoing.');return}if(s.lastTimeout===null){notice('No timeout to undo.');return}const i=s.lastTimeout;s.timeoutUsed[i]=Math.max(0,s.timeoutUsed[i]-1);s.lastTimeout=null;render();persist();notice('Last timeout count restored.')};
+$('newMatch').onclick=()=>{if(!confirm('Reset all scores, fouls, periods and timeout counts?'))return;pauseAll();const prev={teams:s.teams,quarterSec:s.quarterSec,otSec:s.otSec,timeoutSec:s.timeoutSec,timeoutLimit:s.timeoutLimit,shotEnabled:s.shotEnabled,autoShot:s.autoShot,shortBreakSec:s.shortBreakSec,halfBreakSec:s.halfBreakSec,otBreakSec:s.otBreakSec};s={...defaults(),...prev,gameSec:prev.quarterSec,timeoutRemaining:prev.timeoutSec};populate();render();persist();notice('New match ready.')};
+populate();render();persist();if('serviceWorker'in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
 })();
