@@ -1,6 +1,6 @@
 'use strict';
-const CACHE='courtside-v1-0-0-release';
-const ASSETS=['./','./index.html','./app.js?v=1.0.0','./manifest.webmanifest','./icon.svg'];
+const CACHE='courtside-v1-0-1-release';
+const ASSETS=['./','./index.html','./app.js?v=1.0.1','./manifest.webmanifest','./icon.svg'];
 self.addEventListener('install',event=>{
   // Bypass the HTTP cache so the offline bundle contains one complete release.
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS.map(asset=>new Request(new URL(asset,self.registration.scope),{cache:'reload'})))).then(()=>self.skipWaiting()));
